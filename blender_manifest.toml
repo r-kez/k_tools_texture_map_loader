@@ -1,0 +1,21 @@
+schema_version = "1.0.0"
+
+id = "k_tools_texture_map_loader"
+version = "1.0.0"
+name = "K-Tools: Texture Map Loader"
+tagline = " An easy way to load Texture Sets in your Material"
+maintainer = "Robert Kezives <kezives3D@gmail.com>"
+
+type = "add-on"
+
+website = "https://kezives.gumroad.com/l/k_tools_texture_map_loader"
+
+tags = ["Material"]
+
+blender_version_min = "4.2.0"
+
+[permissions]
+files = "Load Node Groups from disk"
+
+license = [
+  "SPDX:GPL-3.0-or-later",]

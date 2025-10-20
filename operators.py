@@ -7,6 +7,9 @@ from .tool_properties import TML_ToolProperties
 from . import assets
 from mathutils import Vector
 
+#####################################################################
+#
+#####################################################################
 class TML_OT_LoadTextureSet(Operator, OperatorFileListElement):
     # ... (bl_idname, bl_label, props inalterados) ...
     bl_idname = "tml.load_texture_set"
@@ -65,7 +68,9 @@ class TML_OT_LoadTextureSet(Operator, OperatorFileListElement):
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
-
+#####################################################################
+#
+#####################################################################
 class TML_OT_GetBatchSettings(Operator):
     # ... (bl_idname, bl_label inalterados) ...
     bl_idname = "tml.get_batch_settings"
@@ -120,6 +125,9 @@ class TML_OT_GetBatchSettings(Operator):
         self.report({'INFO'}, f"Copied settings from '{source_node.name}'")
         return {'FINISHED'}
 
+#####################################################################
+#
+#####################################################################
 class TML_OT_ApplyBatchSettings(Operator):
     """
     Aplica manualmente as configurações de lote aos nós na árvore alvo.
@@ -188,6 +196,9 @@ def get_node_editor_view_center(context):
     # print("TML Warning: Could not find node editor view center, using (0,0).")
     return Vector((0.0, 0.0))
 
+#####################################################################
+#
+#####################################################################
 class TML_OT_AddAssetGroupBase(Operator):
     """Classe base para operadores que adicionam node groups."""
     bl_idname = "tml.add_asset_group_base"
@@ -227,8 +238,6 @@ class TML_OT_AddAssetGroupBase(Operator):
         new_node.name = node_group.name
         new_node.label = node_group.name.split(':')[-1].strip()
 
-
-        # --- LÓGICA DE POSICIONAMENTO CORRIGIDA ---
         current_center = get_node_editor_view_center(context)
         apply_offset = False # Flag para saber se aplicamos offset
 
@@ -287,6 +296,132 @@ class TML_OT_AddBsdfNode(TML_OT_AddAssetGroupBase):
     group_name_to_add: StringProperty(default=assets.BSDF_GROUP_NAME) # type: ignore
     append_unique: bpy.props.BoolProperty(default=False) # type: ignore
 
+
+#####################################################################
+#
+#####################################################################
+# "Loader Output Name": ("BSDF Input Name", "Internal Image Node Name"),
+SOCKET_MAP_CONNECT = {
+    "Base Color":        ("Base Color",        "Diffuse"),
+    "Metalness":         ("Metalness",         "Metalness"),
+    "Roughness":         ("Roughness",         "Roughness"),
+    "Alpha":             ("Alpha",             "Alpha"),
+    "Normal":            ("Normal",            "Normal"),
+    "Displacement":      ("Displacement",      "Displacement"),
+    "Transmission":      ("Transmission",      "Transmission"),
+    "Ambient Occlusion": ("Ambient Occlusion", "AmbientOcclusion"),
+    "Emission":          ("Emission",          "Emission"),
+    "Subsurface Weight": ("Subsurface Weight", "Subsurface Weight"),
+}
+
+MAPPING_LOADER_SOCKET_MAP = {
+    "Vector": "Vector",               # Saída Mapping : Entrada Loader (AJUSTE NOME ENTRADA LOADER SE NECESSÁRIO)
+    "Rotation Angle": "Rotation Angle", # Saída Mapping : Entrada Loader (AJUSTE AMBOS NOMES SE NECESSÁRIO)
+}
+
+class TML_OT_ConnectGroups(Operator):
+    """
+    Connects selected K-Tools groups (Mapping > Loader > BSDF).
+    Select 2 or 3 groups (Mapping, Loader, BSDF).
+    """
+    bl_idname = "tml.connect_loader_to_bsdf" # Mantendo o idname antigo por compatibilidade
+    bl_label = "Connect K-Tools Nodes" # Label mais genérico
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        # Requer material, editor correto, e 2 ou 3 nós de grupo selecionados
+        return (context.material and context.material.use_nodes and
+                context.space_data.type == 'NODE_EDITOR' and
+                context.space_data.tree_type == 'ShaderNodeTree' and
+                len(context.selected_nodes) in [2, 3] and # Aceitar 2 ou 3
+                all(n.type == 'GROUP' for n in context.selected_nodes))
+
+    def execute(self, context):
+        mat_tree = context.material.node_tree
+        selected = context.selected_nodes
+        loader_node = None
+        bsdf_node = None
+        mapping_node = None # Novo
+
+        # Identificar os três tipos de nós
+        for node in selected:
+            if node.node_tree:
+                if node.node_tree.name.startswith(assets.MAPS_LOADER_GROUP_NAME):
+                    loader_node = node
+                elif node.node_tree.name.startswith(assets.BSDF_GROUP_NAME):
+                    bsdf_node = node
+                elif node.node_tree.name.startswith(assets.MAPPING_GROUP_NAME):
+                    mapping_node = node
+
+        # Verificar se temos pelo menos o Loader (essencial)
+        if not loader_node:
+            self.report({'ERROR'}, f"A '{assets.MAPS_LOADER_GROUP_NAME}' node must be selected.")
+            return {'CANCELLED'}
+
+        links = mat_tree.links
+        links_created = 0
+        report_messages = []
+
+        # --- Bloco 1: Conectar Mapping -> Loader ---
+        if mapping_node and loader_node:
+            print(f"TML Connect: Checking Mapping '{mapping_node.name}' -> Loader '{loader_node.name}'")
+            for map_out_name, load_in_name in MAPPING_LOADER_SOCKET_MAP.items():
+                out_sock = mapping_node.outputs.get(map_out_name)
+                in_sock = loader_node.inputs.get(load_in_name)
+
+                if not out_sock or not in_sock: continue
+                if in_sock.is_linked: continue # Não sobrescrever
+
+                print(f"TML Connect: Linking Mapping '{map_out_name}' -> Loader '{load_in_name}'")
+                links.new(out_sock, in_sock)
+                links_created += 1
+            if links_created > 0: report_messages.append("Mapped->Loader")
+
+
+        # --- Bloco 2: Conectar Loader -> BSDF ---
+        if loader_node and bsdf_node:
+            print(f"TML Connect: Checking Loader '{loader_node.name}' -> BSDF '{bsdf_node.name}'")
+            loader_tree = loader_node.node_tree # Árvore interna do loader
+
+            # Usar um cache para nós internos para evitar buscas repetidas
+            internal_img_nodes_cache = {
+                name: loader_tree.nodes.get(name)
+                for _, (_, name) in SOCKET_MAP_CONNECT.items()
+            }
+
+            for loader_out_name, (bsdf_in_name, internal_img_node_name) in SOCKET_MAP_CONNECT.items():
+                out_sock = loader_node.outputs.get(loader_out_name)
+                in_sock = bsdf_node.inputs.get(bsdf_in_name)
+
+                if not out_sock or not in_sock: continue
+
+                # Verificar se o nó interno existe e tem imagem
+                internal_img_node = internal_img_nodes_cache.get(internal_img_node_name)
+                if not internal_img_node or not internal_img_node.image:
+                    continue # Pular se nó interno não existe ou não tem imagem
+
+                if in_sock.is_linked: continue # Não sobrescrever
+
+                print(f"TML Connect: Linking Loader '{loader_out_name}' -> BSDF '{bsdf_in_name}' (Image found in '{internal_img_node_name}')")
+                links.new(out_sock, in_sock)
+                links_created += 1
+            if "Mapped->Loader" not in report_messages and links_created > 0: # Evitar duplicar se M->L já foi contado
+                report_messages.append("Loader->BSDF")
+
+
+        # --- Reportar Resultado ---
+        if links_created > 0:
+            message = f"Created {links_created} link(s) ({' & '.join(report_messages)})."
+            self.report({'INFO'}, message)
+        elif not mapping_node and not bsdf_node:
+            self.report({'WARNING'}, "Select Loader and Mapping or BSDF node.")
+        else:
+            self.report({'INFO'}, "No new links needed or created.")
+
+        return {'FINISHED'}
+
+
 # --- Registro ---
 classes = (
     TML_OT_LoadTextureSet,
@@ -295,7 +430,8 @@ classes = (
     TML_OT_AddAssetGroupBase,
     TML_OT_AddMappingNode,
     TML_OT_AddMapsLoaderNode,
-    TML_OT_AddBsdfNode,    
+    TML_OT_AddBsdfNode, 
+    TML_OT_ConnectGroups,   
 )
 
 def register():

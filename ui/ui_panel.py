@@ -30,6 +30,9 @@ class TML_PT_MainPanel(Panel):
         row_add.operator(operators.TML_OT_AddMapsLoaderNode.bl_idname, text="Loader", icon='NODETREE')
         row_add.operator(operators.TML_OT_AddBsdfNode.bl_idname, text="BSDF", icon='MATERIAL')
         layout.enabled = original_add_enabled_state
+        
+        row_connect = box_add.row()
+        row_connect.operator(operators.TML_OT_ConnectGroups.bl_idname, icon='LINKED', text='Connect Selected Nodes')
 
         target_tree = utils.get_target_node_tree(context)
         if not target_tree:

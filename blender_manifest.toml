@@ -14,8 +14,9 @@ tags = ["Material"]
 
 blender_version_min = "4.2.0"
 
+license = [
+  "SPDX:GPL-3.0-or-later",
+  ]
+
 [permissions]
 files = "Load Node Groups from disk"
-
-license = [
-  "SPDX:GPL-3.0-or-later",]
